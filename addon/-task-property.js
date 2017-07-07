@@ -1,12 +1,23 @@
 import Ember from 'ember';
-import TaskInstance from './-task-instance';
+import { default as TaskInstance, getRunningInstance } from './-task-instance';
+import { PERFORM_TYPE_DEFAULT, PERFORM_TYPE_UNLINKED, PERFORM_TYPE_LINKED } from './-task-instance';
 import TaskStateMixin from './-task-state-mixin';
 import { TaskGroup } from './-task-group';
 import { propertyModifiers, resolveScheduler } from './-property-modifiers-mixin';
 import { objectAssign, INVOKE, _cleanupOnDestroy, _ComputedProperty } from './utils';
 import EncapsulatedTask from './-encapsulated-task';
 
-const { getOwner } = Ember;
+const { computed, getOwner } = Ember;
+
+const PerformProxy = Ember.Object.extend({
+  _task: null,
+  _performType: null,
+  _linkedObject: null,
+
+  perform(...args) {
+    return this._task._performShared(args, this._performType, this._linkedObject);
+  },
+});
 
 /**
   The `Task` object lives on a host Ember object (e.g.
@@ -147,6 +158,7 @@ export const Task = Ember.Object.extend(TaskStateMixin, {
   context: null,
   _observes: null,
   _curryArgs: null,
+  _linkedObjects: null,
 
   init() {
     this._super(...arguments);
@@ -164,6 +176,26 @@ export const Task = Ember.Object.extend(TaskStateMixin, {
     let task = this._clone();
     task._curryArgs = [...(this._curryArgs || []), ...args];
     return task;
+  },
+
+  linked() {
+    let taskInstance = getRunningInstance();
+    if (!taskInstance) {
+      throw new Error(`You can only call .linked() from within a task.`);
+    }
+
+    return PerformProxy.create({
+      _task: this,
+      _performType: PERFORM_TYPE_LINKED,
+      _linkedObject: taskInstance,
+    });
+  },
+
+  unlinked() {
+    return PerformProxy.create({
+      _task: this,
+      _performType: PERFORM_TYPE_UNLINKED,
+    });
   },
 
   _clone() {
@@ -305,6 +337,10 @@ export const Task = Ember.Object.extend(TaskStateMixin, {
    * @instance
    */
   perform(...args) {
+    return this._performShared(args, PERFORM_TYPE_DEFAULT, null);
+  },
+
+  _performShared(args, performType, linkedObject) {
     let fullArgs = this._curryArgs ? [...this._curryArgs, ...args] : args;
     let taskInstance = this._taskInstanceFactory.create({
       fn: this.fn,
@@ -314,14 +350,21 @@ export const Task = Ember.Object.extend(TaskStateMixin, {
       task: this,
       _debug: this._debug,
       _origin: this,
+      _performType: performType,
     });
 
     if (this.context.isDestroying) {
+      // TODO: express this in terms of lifetimes; a task linked to
+      // a dead lifetime should immediately cancel.
       taskInstance.cancel();
     }
 
     this._scheduler.schedule(taskInstance);
     return taskInstance;
+  },
+
+  performUnlinked(...args) {
+    return this._performShared(args, PERFORM_TYPE_UNLINKED, null);
   },
 
   [INVOKE](...args) {

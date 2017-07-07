@@ -22,6 +22,16 @@ const GENERATOR_STATE_HAS_MORE_VALUES = "HAS_MORE_VALUES";
 const GENERATOR_STATE_DONE = "DONE";
 const GENERATOR_STATE_ERRORED = "ERRORED";
 
+export const PERFORM_TYPE_DEFAULT  = "PERFORM_TYPE_DEFAULT";
+export const PERFORM_TYPE_UNLINKED = "PERFORM_TYPE_UNLINKED";
+export const PERFORM_TYPE_LINKED   = "PERFORM_TYPE_LINKED";
+
+let TASK_INSTANCE_STACK = [];
+
+export function getRunningInstance() {
+  return TASK_INSTANCE_STACK[TASK_INSTANCE_STACK.length - 1];
+}
+
 function handleYieldedUnknownThenable(thenable, taskInstance, resumeIndex) {
   thenable.then(value => {
     taskInstance.proceed(resumeIndex, YIELDABLE_CONTINUE, value);
@@ -94,6 +104,7 @@ let taskInstanceAttrs = {
   _runLoop: true,
   _debug: false,
   cancelReason: null,
+  _performType: PERFORM_TYPE_DEFAULT,
 
   /**
    * If this TaskInstance runs to completion by returning a property
@@ -407,6 +418,8 @@ let taskInstanceAttrs = {
     Ember.assert("The task generator function has already run to completion. This is probably an ember-concurrency bug.", !this._isGeneratorDone());
 
     try {
+      TASK_INSTANCE_STACK.push(this);
+
       let iterator = this._getIterator();
       let result = iterator[iteratorMethod](nextValue);
 
@@ -419,6 +432,8 @@ let taskInstanceAttrs = {
     } catch(e) {
       this._generatorValue = e;
       this._generatorState = GENERATOR_STATE_ERRORED;
+    } finally {
+      TASK_INSTANCE_STACK.pop();
     }
   },
 
@@ -616,9 +631,9 @@ let taskInstanceAttrs = {
 taskInstanceAttrs[yieldableSymbol] = function handleYieldedTaskInstance(parentTaskInstance, resumeIndex) {
   let yieldedTaskInstance = this;
   yieldedTaskInstance._hasSubscribed = true;
-  let state = yieldedTaskInstance._completionState;
 
-  if (state) {
+  yieldedTaskInstance._onFinalize(() => {
+    let state = yieldedTaskInstance._completionState;
     if (state === COMPLETION_SUCCESS) {
       parentTaskInstance.proceed(resumeIndex, YIELDABLE_CONTINUE, yieldedTaskInstance.value);
     } else if (state === COMPLETION_ERROR) {
@@ -626,15 +641,25 @@ taskInstanceAttrs[yieldableSymbol] = function handleYieldedTaskInstance(parentTa
     } else if (state === COMPLETION_CANCEL) {
       parentTaskInstance.proceed(resumeIndex, YIELDABLE_CANCEL, null);
     }
-  } else {
-    yieldedTaskInstance._onFinalize(function handleFinalizedYieldedTaskInstance() {
-      handleYieldedTaskInstance.call(yieldedTaskInstance, parentTaskInstance, resumeIndex);
-    });
-    return function disposeYieldedTaskInstance() {
-      // TODO: provide reason for cancelation.
+  });
+
+  return function disposeYieldedTaskInstance() {
+    if (yieldedTaskInstance._performType !== PERFORM_TYPE_UNLINKED) {
+      if (yieldedTaskInstance._performType === PERFORM_TYPE_DEFAULT) {
+        let parentObj = get(parentTaskInstance, 'task.context');
+        let childObj = get(yieldedTaskInstance, 'task.context');
+        if (parentObj && childObj &&
+            parentObj !== childObj &&
+            parentObj.isDestroying &&
+            get(yieldedTaskInstance, 'isRunning')) {
+          let parentName = `\`${parentTaskInstance.task._propertyName}\``;
+          let childName = `\`${yieldedTaskInstance.task._propertyName}\``;
+          Ember.Logger.warn(`ember-concurrency detected a potentially hazardous "self-cancel loop" between parent task ${parentName} and child task ${childName}. If you want child task ${childName} to be canceled when parent task ${parentName} is canceled, please change \`.perform()\` to \`.linked().perform()\`. If you want child task ${childName} to keep running after parent task ${parentName} is canceled, change it to \`.unlinked().perform()\``);
+        }
+      }
       yieldedTaskInstance.cancel();
-    };
-  }
+    }
+  };
 };
 
 let TaskInstance = Ember.Object.extend(taskInstanceAttrs);
