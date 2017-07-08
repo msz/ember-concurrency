@@ -551,3 +551,29 @@ test(".linked() throws an error if called outside of a task", function(assert) {
   });
 });
 
+test(".linked() warns when not immediately yielded", function(assert) {
+  assert.expect(1);
+
+  let warnings = [];
+  Ember.Logger.warn = (...args) => {
+    warnings.push(args);
+  };
+
+  let Obj = Ember.Object.extend({
+    a: task(function * () {
+      this.get('b').linked().perform();
+    }),
+    b: task(function * () { }),
+  });
+
+  Ember.run(() => {
+    Obj.create().get('a').perform();
+  });
+
+  assert.deepEqual(warnings, [
+    [
+      "You performed a .linked() task without immediately yielding/returning it. This is currently unsupported (but might be supported in future version of ember-concurrency)."
+    ]
+  ]);
+});
+

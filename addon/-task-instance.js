@@ -105,6 +105,7 @@ let taskInstanceAttrs = {
   _debug: false,
   cancelReason: null,
   _performType: PERFORM_TYPE_DEFAULT,
+  _expectsLinkedYield: false,
 
   /**
    * If this TaskInstance runs to completion by returning a property
@@ -433,6 +434,13 @@ let taskInstanceAttrs = {
       this._generatorValue = e;
       this._generatorState = GENERATOR_STATE_ERRORED;
     } finally {
+      if (this._expectsLinkedYield) {
+        if (!this._generatorValue || this._generatorValue._performType !== PERFORM_TYPE_LINKED) {
+          Ember.Logger.warn("You performed a .linked() task without immediately yielding/returning it. This is currently unsupported (but might be supported in future version of ember-concurrency).");
+        }
+        this._expectsLinkedYield = false;
+      }
+
       TASK_INSTANCE_STACK.pop();
     }
   },

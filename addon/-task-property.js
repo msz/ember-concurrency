@@ -7,7 +7,7 @@ import { propertyModifiers, resolveScheduler } from './-property-modifiers-mixin
 import { objectAssign, INVOKE, _cleanupOnDestroy, _ComputedProperty } from './utils';
 import EncapsulatedTask from './-encapsulated-task';
 
-const { computed, getOwner } = Ember;
+const { getOwner } = Ember;
 
 const PerformProxy = Ember.Object.extend({
   _task: null,
@@ -353,6 +353,10 @@ export const Task = Ember.Object.extend(TaskStateMixin, {
       _performType: performType,
     });
 
+    if (performType === PERFORM_TYPE_LINKED) {
+      linkedObject._expectsLinkedYield = true;
+    }
+
     if (this.context.isDestroying) {
       // TODO: express this in terms of lifetimes; a task linked to
       // a dead lifetime should immediately cancel.
@@ -361,10 +365,6 @@ export const Task = Ember.Object.extend(TaskStateMixin, {
 
     this._scheduler.schedule(taskInstance);
     return taskInstance;
-  },
-
-  performUnlinked(...args) {
-    return this._performShared(args, PERFORM_TYPE_UNLINKED, null);
   },
 
   [INVOKE](...args) {
