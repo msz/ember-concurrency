@@ -200,6 +200,69 @@ test("cancelation: yields in finally block", function(assert) {
   assert.ok(taskInstance.get('isCanceling'));
 });
 
+test("cancelation: yields generators in finally block", function (assert) {
+  assert.expect(19);
+
+  let defer0, defer1, defer2;
+  let taskInstance = run(() => {
+    return wrap(function* () {
+      try {
+        defer0 = RSVP.defer();
+        function* defer0Gen() {
+          yield defer0.promise;
+        }
+        yield* defer0Gen();
+        assert.ok(false, "should not get here");
+      } finally {
+        defer1 = RSVP.defer();
+        function* defer1Gen() {
+          yield defer1.promise;
+        }
+        let result = yield* defer1Gen();
+        assert.equal(result, 123);
+        defer2 = RSVP.defer();
+        function* defer2Gen() {
+          yield defer2.promise;
+        }
+        result = yield* defer2Gen();
+        assert.equal(result, 456);
+      }
+    })();
+  });
+
+  expectCancelation(assert, taskInstance);
+
+  run(() => {
+    assert.ok(!taskInstance.get('isCanceled'));
+
+    defer0.resolve();
+    taskInstance.cancel();
+    assert.ok(!taskInstance.get('isFinished'), "task is not yet finished");
+    assert.ok(!taskInstance.get('isCanceled'), "task is not yet canceled");
+    assert.ok(taskInstance.get('isCanceling'), "task is canceling");
+    assert.ok(!taskInstance.get('isError'));
+  });
+
+  run(null, defer1.resolve, 123);
+  assert.ok(!taskInstance.get('isFinished'), "task is not yet finished");
+  assert.ok(!taskInstance.get('isCanceled'), "task is not yet canceled");
+  assert.ok(taskInstance.get('isCanceling'), "task is canceling");
+  assert.ok(enteringFinally, 'entered finally block')
+  assert.ok(defer1Executed, 'defer1 executed');
+  assert.ok(!defer2Executed, 'defer2 not yet excecuted');
+  assert.ok(!finishingFinally, 'not yet exited finally block');
+  run(null, defer2.resolve, 456);
+  assert.ok(taskInstance.get('isCanceled'));
+  assert.ok(!taskInstance.get('isSuccessful'));
+  assert.ok(!taskInstance.get('isError'));
+  run(null, defer2.resolve, 456);
+  assert.ok(taskInstance.get('isFinished'));
+  assert.ok(taskInstance.get('isCanceled'));
+  assert.ok(!taskInstance.get('isSuccessful'));
+  assert.ok(!taskInstance.get('isError'));
+  assert.ok(taskInstance.get('isCanceling'));
+});
+
 test("deferred start", function(assert) {
   assert.expect(4);
 
